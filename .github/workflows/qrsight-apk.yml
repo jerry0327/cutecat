@@ -31,18 +31,71 @@ jobs:
           tar -xzf /tmp/qrsight-source.tar.gz
           test -f qrscanner/app/build.gradle
 
-          MAIN='qrscanner/app/src/main/java/com/jerry/qrsight/MainActivity.java'
-          HISTORY='qrscanner/app/src/main/java/com/jerry/qrsight/HistoryActivity.java'
-          sed -i 's/import android.content.ColorStateList;/import android.content.res.ColorStateList;/' "$MAIN" "$HISTORY"
-          if ! grep -q 'import android.annotation.SuppressLint;' "$MAIN"; then
-            sed -i '/import android.Manifest;/a import android.annotation.SuppressLint;' "$MAIN"
-          fi
-          if ! grep -q '@SuppressLint("UnsafeOptInUsageError")' "$MAIN"; then
-            sed -i 's/    private void analyzeImage(@NonNull ImageProxy imageProxy) {/    @SuppressLint("UnsafeOptInUsageError")\n    private void analyzeImage(@NonNull ImageProxy imageProxy) {/' "$MAIN"
-          fi
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('qrscanner')
+          main = root / 'app/src/main/java/com/jerry/qrsight/MainActivity.java'
+          history = root / 'app/src/main/java/com/jerry/qrsight/HistoryActivity.java'
+          build = root / 'app/build.gradle'
+          manifest = root / 'app/src/main/AndroidManifest.xml'
+          readme = root / 'README.md'
+
+          text = main.read_text(encoding='utf-8')
+          text = text.replace('import android.content.ColorStateList;', 'import android.content.res.ColorStateList;')
+          if 'import android.annotation.SuppressLint;' not in text:
+              text = text.replace('import android.Manifest;\n', 'import android.Manifest;\nimport android.annotation.SuppressLint;\n')
+          if '@SuppressLint("UnsafeOptInUsageError")' not in text:
+              text = text.replace(
+                  '    private void analyzeImage(@NonNull ImageProxy imageProxy) {',
+                  '    @SuppressLint("UnsafeOptInUsageError")\n    private void analyzeImage(@NonNull ImageProxy imageProxy) {'
+              )
+          old_sort = '''        Collections.sort(found, Comparator
+                  .comparingDouble((Detection item) -> item.bounds.top)
+                  .thenComparingDouble(item -> item.bounds.left));'''
+          new_sort = '''        Collections.sort(found, (first, second) -> {
+              int topOrder = Float.compare(first.bounds.top, second.bounds.top);
+              return topOrder != 0 ? topOrder : Float.compare(first.bounds.left, second.bounds.left);
+          });'''
+          if old_sort not in text:
+              raise SystemExit('Expected legacy comparator block was not found')
+          text = text.replace(old_sort, new_sort)
+          text = text.replace('import java.util.Comparator;\n', '')
+          main.write_text(text, encoding='utf-8')
+
+          h = history.read_text(encoding='utf-8')
+          h = h.replace('import android.content.ColorStateList;\n', '')
+          h = h.replace('import android.content.res.ColorStateList;\n', '')
+          history.write_text(h, encoding='utf-8')
+
+          g = build.read_text(encoding='utf-8')
+          replacements = {
+              'targetSdk 35': 'targetSdk 36',
+              "androidx.appcompat:appcompat:1.7.0": "androidx.appcompat:appcompat:1.7.1",
+              "androidx.core:core:1.15.0": "androidx.core:core:1.19.0",
+              "androidx.activity:activity:1.10.1": "androidx.activity:activity:1.13.0",
+              "com.google.android.material:material:1.12.0": "com.google.android.material:material:1.14.0",
+          }
+          for old, new in replacements.items():
+              if old not in g:
+                  raise SystemExit(f'Expected Gradle token missing: {old}')
+              g = g.replace(old, new)
+          build.write_text(g, encoding='utf-8')
+
+          m = manifest.read_text(encoding='utf-8')
+          m = re.sub(r'\n\s*android:screenOrientation="portrait"', '', m)
+          manifest.write_text(m, encoding='utf-8')
+
+          if readme.exists():
+              r = readme.read_text(encoding='utf-8').replace('targetSdk: 35', 'targetSdk: 36')
+              readme.write_text(r, encoding='utf-8')
+          PY
 
           ! grep -R --line-number 'import android.content.ColorStateList;' qrscanner/app/src/main/java
-          grep -q '@SuppressLint("UnsafeOptInUsageError")' "$MAIN"
+          ! grep -R --line-number 'Comparator.comparingDouble' qrscanner/app/src/main/java
+          grep -q '@SuppressLint("UnsafeOptInUsageError")' qrscanner/app/src/main/java/com/jerry/qrsight/MainActivity.java
+          grep -q 'targetSdk 36' qrscanner/app/build.gradle
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -89,6 +142,7 @@ jobs:
         working-directory: qrscanner
         shell: bash
         run: |
+          set +e
           set -o pipefail
           mkdir -p ../dist
           gradle --no-daemon --stacktrace --console=plain \
@@ -136,7 +190,7 @@ jobs:
           "$BT/aapt" dump permissions "$OUT" > dist/permissions.txt
 
           grep -q "package: name='com.jerry.qrsight'" dist/badging.txt
-          grep -q "targetSdkVersion:'35'" dist/badging.txt
+          grep -q "targetSdkVersion:'36'" dist/badging.txt
           grep -q 'android.permission.CAMERA' dist/permissions.txt
 
           if grep -Eq 'android.permission.(INTERNET|ACCESS_NETWORK_STATE|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|READ_MEDIA_IMAGES)' dist/permissions.txt; then
@@ -151,7 +205,7 @@ jobs:
             echo 'Build type: signed release APK'
             echo 'Package: com.jerry.qrsight'
             echo 'minSdk: 23'
-            echo 'targetSdk: 35'
+            echo 'targetSdk: 36'
             echo 'compileSdk: 36'
             echo
             echo '=== APK SHA-256 ==='
