@@ -29,9 +29,7 @@ jobs:
           cat qrsight_bundle.part-* | base64 --decode > /tmp/qrsight-source.tar.gz
           tar -xzf /tmp/qrsight-source.tar.gz
           test -f qrscanner/app/build.gradle
-          sed -i 's/import android\.content\.ColorStateList;/import android.content.res.ColorStateList;/' \
-            qrscanner/app/src/main/java/com/jerry/qrsight/MainActivity.java \
-            qrscanner/app/src/main/java/com/jerry/qrsight/HistoryActivity.java
+          python3 tools/qrsight_patch.py
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
