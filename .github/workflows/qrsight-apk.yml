@@ -1,0 +1,151 @@
+name: Build QRSight Release APK
+
+on:
+  push:
+    branches:
+      - 'chatgpt/qrsight-*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-qrsight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore QRSight source bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat qrsight_bundle.part-* | base64 --decode > /tmp/qrsight-source.tar.gz
+          tar -xzf /tmp/qrsight-source.tar.gz
+          test -f qrscanner/app/build.gradle
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform and build tools
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Generate isolated release signing key
+        id: signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          PASS="$(openssl rand -hex 24)"
+          echo "::add-mask::$PASS"
+          KEYSTORE="$RUNNER_TEMP/qrsight-release.jks"
+          keytool -genkeypair -noprompt \
+            -keystore "$KEYSTORE" \
+            -storepass "$PASS" \
+            -keypass "$PASS" \
+            -alias qrsight \
+            -keyalg RSA \
+            -keysize 4096 \
+            -validity 10000 \
+            -dname 'CN=QRSight Release,O=Jerry Wang,C=TW'
+          echo "keystore=$KEYSTORE" >> "$GITHUB_OUTPUT"
+          echo "password=$PASS" >> "$GITHUB_OUTPUT"
+
+      - name: Unit tests, lint, and signed release build
+        working-directory: qrscanner
+        run: |
+          gradle --no-daemon --stacktrace \
+            testReleaseUnitTest lintRelease assembleRelease \
+            -PQRSIGHT_STORE_FILE='${{ steps.signing.outputs.keystore }}' \
+            -PQRSIGHT_STORE_PASSWORD='${{ steps.signing.outputs.password }}' \
+            -PQRSIGHT_KEY_ALIAS='qrsight' \
+            -PQRSIGHT_KEY_PASSWORD='${{ steps.signing.outputs.password }}'
+
+      - name: Verify package, permissions, alignment, signature, and ZIP integrity
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          APK='qrscanner/app/build/outputs/apk/release/app-release.apk'
+          OUT='dist/QRSight-v1.0.0-release.apk'
+          cp "$APK" "$OUT"
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+
+          "$BT/zipalign" -c -v 4 "$OUT" > dist/zipalign.txt
+          "$BT/apksigner" verify --verbose --print-certs "$OUT" > dist/signature.txt
+          unzip -t "$OUT" > dist/unzip-test.txt
+          "$BT/aapt" dump badging "$OUT" > dist/badging.txt
+          "$BT/aapt" dump permissions "$OUT" > dist/permissions.txt
+
+          grep -q "package: name='com.jerry.qrsight'" dist/badging.txt
+          grep -q "targetSdkVersion:'35'" dist/badging.txt
+          grep -q 'android.permission.CAMERA' dist/permissions.txt
+
+          if grep -Eq 'android.permission.(INTERNET|ACCESS_NETWORK_STATE|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|READ_MEDIA_IMAGES)' dist/permissions.txt; then
+            echo 'Unexpected network or storage permission detected.' >&2
+            cat dist/permissions.txt >&2
+            exit 1
+          fi
+
+          sha256sum "$OUT" > dist/SHA256SUMS.txt
+          {
+            echo 'QRSight 快掃 v1.0.0'
+            echo 'Build type: signed release APK'
+            echo 'Package: com.jerry.qrsight'
+            echo 'minSdk: 23'
+            echo 'targetSdk: 35'
+            echo 'compileSdk: 36'
+            echo
+            echo '=== APK SHA-256 ==='
+            cat dist/SHA256SUMS.txt
+            echo
+            echo '=== Badging ==='
+            cat dist/badging.txt
+            echo
+            echo '=== Permissions ==='
+            cat dist/permissions.txt
+            echo
+            echo '=== Signature ==='
+            cat dist/signature.txt
+            echo
+            echo '=== Zipalign ==='
+            cat dist/zipalign.txt
+            echo
+            echo 'Build-level validation completed in GitHub Actions.'
+            echo 'Physical-device camera behavior requires installation on an Android phone.'
+          } > dist/QRSight-build-report.txt
+
+      - name: Package source code
+        run: |
+          zip -r dist/QRSight-v1.0.0-source.zip qrscanner \
+            -x '*/.gradle/*' '*/build/*' '*.jks' '*.keystore'
+
+      - name: Upload install package and verification report
+        uses: actions/upload-artifact@v4
+        with:
+          name: qrsight-apk
+          path: |
+            dist/QRSight-v1.0.0-release.apk
+            dist/QRSight-v1.0.0-source.zip
+            dist/QRSight-build-report.txt
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
