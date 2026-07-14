@@ -8,15 +8,20 @@ main = main.replace(
     "import android.content.ColorStateList;",
     "import android.content.res.ColorStateList;",
 )
+if "import androidx.annotation.OptIn;" not in main:
+    main = main.replace(
+        "import androidx.annotation.NonNull;\n",
+        "import androidx.annotation.NonNull;\nimport androidx.annotation.OptIn;\n",
+    )
 if "import androidx.camera.core.ExperimentalGetImage;" not in main:
     main = main.replace(
         "import androidx.camera.core.CameraSelector;\n",
         "import androidx.camera.core.CameraSelector;\nimport androidx.camera.core.ExperimentalGetImage;\n",
     )
-if "    @ExperimentalGetImage\n    private void analyzeImage" not in main:
+if "    @OptIn(markerClass = ExperimentalGetImage.class)\n    private void analyzeImage" not in main:
     main = main.replace(
         "    private void analyzeImage(@NonNull ImageProxy imageProxy) {",
-        "    @ExperimentalGetImage\n    private void analyzeImage(@NonNull ImageProxy imageProxy) {",
+        "    @OptIn(markerClass = ExperimentalGetImage.class)\n    private void analyzeImage(@NonNull ImageProxy imageProxy) {",
     )
 main = main.replace(
     """        Collections.sort(found, Comparator
