@@ -51,16 +51,20 @@ jobs:
                   '    private void analyzeImage(@NonNull ImageProxy imageProxy) {',
                   '    @SuppressLint("UnsafeOptInUsageError")\n    private void analyzeImage(@NonNull ImageProxy imageProxy) {'
               )
-          old_sort = '''        Collections.sort(found, Comparator
-                  .comparingDouble((Detection item) -> item.bounds.top)
-                  .thenComparingDouble(item -> item.bounds.left));'''
-          new_sort = '''        Collections.sort(found, (first, second) -> {
-              int topOrder = Float.compare(first.bounds.top, second.bounds.top);
-              return topOrder != 0 ? topOrder : Float.compare(first.bounds.left, second.bounds.left);
-          });'''
-          if old_sort not in text:
-              raise SystemExit('Expected legacy comparator block was not found')
-          text = text.replace(old_sort, new_sort)
+          sort_pattern = re.compile(
+              r'        Collections\.sort\(found,\s*Comparator\s*'
+              r'\.comparingDouble\(\(Detection item\) -> item\.bounds\.top\)\s*'
+              r'\.thenComparingDouble\(item -> item\.bounds\.left\)\);'
+          )
+          new_sort = (
+              '        Collections.sort(found, (first, second) -> {\n'
+              '            int topOrder = Float.compare(first.bounds.top, second.bounds.top);\n'
+              '            return topOrder != 0 ? topOrder : Float.compare(first.bounds.left, second.bounds.left);\n'
+              '        });'
+          )
+          text, sort_count = sort_pattern.subn(new_sort, text)
+          if sort_count != 1:
+              raise SystemExit(f'Expected one legacy comparator block, found {sort_count}')
           text = text.replace('import java.util.Comparator;\n', '')
           main.write_text(text, encoding='utf-8')
 
