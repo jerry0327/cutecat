@@ -177,24 +177,40 @@ jobs:
           set -euo pipefail
           APK='qrscanner/app/build/outputs/apk/release/app-release.apk'
           OUT='dist/QRSight-v1.0.0-release.apk'
-          cp "$APK" "$OUT"
           BT="$ANDROID_HOME/build-tools/36.0.0"
+          ANALYZER="$(command -v apkanalyzer)"
+
+          test -s "$APK"
+          cp "$APK" "$OUT"
+          test -x "$BT/zipalign"
+          test -x "$BT/apksigner"
+          test -x "$ANALYZER"
 
           "$BT/zipalign" -c -v 4 "$OUT" > dist/zipalign.txt
           "$BT/apksigner" verify --verbose --print-certs "$OUT" > dist/signature.txt
           unzip -t "$OUT" > dist/unzip-test.txt
-          "$BT/aapt" dump badging "$OUT" > dist/badging.txt
-          "$BT/aapt" dump permissions "$OUT" > dist/permissions.txt
 
-          grep -q "package: name='com.jerry.qrsight'" dist/badging.txt
-          grep -q "targetSdkVersion:'36'" dist/badging.txt
-          grep -q 'android.permission.CAMERA' dist/permissions.txt
+          "$ANALYZER" manifest application-id "$OUT" | tr -d '\r' > dist/application-id.txt
+          "$ANALYZER" manifest min-sdk "$OUT" | tr -d '\r' > dist/min-sdk.txt
+          "$ANALYZER" manifest target-sdk "$OUT" | tr -d '\r' > dist/target-sdk.txt
+          "$ANALYZER" manifest permissions "$OUT" | tr -d '\r' > dist/permissions.txt
 
-          if grep -Eq 'android.permission.(INTERNET|ACCESS_NETWORK_STATE|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|READ_MEDIA_IMAGES)' dist/permissions.txt; then
-            echo 'Unexpected network or storage permission detected.' >&2
+          grep -qx 'com.jerry.qrsight' dist/application-id.txt
+          grep -qx '23' dist/min-sdk.txt
+          grep -qx '36' dist/target-sdk.txt
+          grep -Fxq 'android.permission.CAMERA' dist/permissions.txt
+
+          if grep -Eq '^android.permission.(INTERNET|ACCESS_NETWORK_STATE|READ_EXTERNAL_STORAGE|WRITE_EXTERNAL_STORAGE|READ_MEDIA_IMAGES)$' dist/permissions.txt; then
+            echo 'Unexpected network or broad storage permission detected.' >&2
             cat dist/permissions.txt >&2
             exit 1
           fi
+
+          {
+            echo "applicationId: $(cat dist/application-id.txt)"
+            echo "minSdk: $(cat dist/min-sdk.txt)"
+            echo "targetSdk: $(cat dist/target-sdk.txt)"
+          } > dist/badging.txt
 
           sha256sum "$OUT" > dist/SHA256SUMS.txt
           {
@@ -208,7 +224,7 @@ jobs:
             echo '=== APK SHA-256 ==='
             cat dist/SHA256SUMS.txt
             echo
-            echo '=== Badging ==='
+            echo '=== Package metadata ==='
             cat dist/badging.txt
             echo
             echo '=== Permissions ==='
