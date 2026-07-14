@@ -80,6 +80,19 @@ jobs:
           build.write_text(g, encoding='utf-8')
 
           m = manifest.read_text(encoding='utf-8')
+          if 'xmlns:tools=' not in m:
+              m = m.replace(
+                  '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+                  '<manifest xmlns:android="http://schemas.android.com/apk/res/android"\n'
+                  '    xmlns:tools="http://schemas.android.com/tools">'
+              )
+          remove_permissions = (
+              '    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />\n'
+              '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />\n\n'
+          )
+          camera_permission = '    <uses-permission android:name="android.permission.CAMERA" />'
+          if 'android.permission.INTERNET" tools:node="remove"' not in m:
+              m = m.replace(camera_permission, remove_permissions + camera_permission)
           m = re.sub(r'\n\s*android:screenOrientation="portrait"', '', m)
           manifest.write_text(m, encoding='utf-8')
 
@@ -92,6 +105,8 @@ jobs:
           ! grep -R --line-number 'Comparator.comparingDouble' qrscanner/app/src/main/java
           grep -q '@SuppressLint("UnsafeOptInUsageError")' qrscanner/app/src/main/java/com/jerry/qrsight/MainActivity.java
           grep -q 'targetSdk 36' qrscanner/app/build.gradle
+          grep -q 'android.permission.INTERNET" tools:node="remove"' qrscanner/app/src/main/AndroidManifest.xml
+          grep -q 'android.permission.ACCESS_NETWORK_STATE" tools:node="remove"' qrscanner/app/src/main/AndroidManifest.xml
           grep -q "androidx.core:core:1.15.0" qrscanner/app/build.gradle
 
       - name: Set up JDK 17
