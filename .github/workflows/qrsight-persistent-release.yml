@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - 'qr-apk-staging-*'
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
