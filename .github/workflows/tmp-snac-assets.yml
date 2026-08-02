@@ -34,6 +34,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      - name: Set up Python for wheel download
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - name: Install uv
         uses: astral-sh/setup-uv@v6
       - name: Download relocatable Python 3.12
@@ -45,11 +49,8 @@ jobs:
       - name: Download Linux wheels
         run: |
           set -euxo pipefail
-          PY="$(find out/python312 -type f -path '*/bin/python3.12' | head -n 1)"
-          test -n "$PY"
-          "$PY" -m ensurepip --upgrade
-          "$PY" -m pip install --upgrade pip
-          "$PY" -m pip download --only-binary=:all: --dest out/wheels \
+          python -m pip install --upgrade pip
+          python -m pip download --only-binary=:all: --dest out/wheels \
             'onnxruntime>=1.21,<2' \
             'faster-whisper>=1.1,<2' \
             'huggingface-hub>=0.30,<2'
