@@ -72,10 +72,10 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Download Faster-Whisper large-v3-turbo CTranslate2 model
+      - name: Download and split Faster-Whisper large-v3-turbo model
         run: |
           set -euxo pipefail
-          mkdir -p out/asr-model out/logs
+          mkdir -p out/asr-model out/model-parts out/logs
           python -m pip install --upgrade pip 'huggingface-hub>=0.30,<2' hf-xet
           python - <<'PY'
           from huggingface_hub import snapshot_download
@@ -89,13 +89,60 @@ jobs:
               ],
           ))
           PY
-          find out/asr-model -type f -printf '%P\t%s\n' | sort | tee out/logs/asr-model-files.tsv
-          sha256sum out/asr-model/* | tee out/logs/asr-model-sha256.txt
-      - name: Upload ASR model
+          sha256sum out/asr-model/model.bin | tee out/logs/model.bin.sha256
+          stat -c '%s' out/asr-model/model.bin | tee out/logs/model.bin.size
+          split -b 400000000 -d -a 2 out/asr-model/model.bin out/model-parts/model.bin.part-
+          rm out/asr-model/model.bin
+          find out/asr-model -type f -printf '%P\t%s\n' | sort | tee out/logs/asr-metadata-files.tsv
+          find out/model-parts -type f -printf '%f\t%s\n' | sort | tee out/logs/model-parts.tsv
+          sha256sum out/model-parts/* | tee out/logs/model-parts.sha256
+      - name: Upload ASR metadata
         uses: actions/upload-artifact@v4
         with:
-          name: faster-whisper-large-v3-turbo
-          path: out
+          name: faster-whisper-large-v3-turbo-meta
+          path: |
+            out/asr-model
+            out/logs
           compression-level: 0
           retention-days: 1
           if-no-files-found: error
+      - name: Upload model part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: faster-whisper-large-v3-turbo-model-00
+          path: out/model-parts/model.bin.part-00
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+      - name: Upload model part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: faster-whisper-large-v3-turbo-model-01
+          path: out/model-parts/model.bin.part-01
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+      - name: Upload model part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: faster-whisper-large-v3-turbo-model-02
+          path: out/model-parts/model.bin.part-02
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+      - name: Upload model part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: faster-whisper-large-v3-turbo-model-03
+          path: out/model-parts/model.bin.part-03
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+      - name: Upload model part 04 if present
+        uses: actions/upload-artifact@v4
+        with:
+          name: faster-whisper-large-v3-turbo-model-04
+          path: out/model-parts/model.bin.part-04
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: ignore
