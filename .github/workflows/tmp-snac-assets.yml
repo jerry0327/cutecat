@@ -1,4 +1,4 @@
-name: Temporary SNAC asset test
+name: Temporary SNAC and ASR asset fetch
 
 on:
   pull_request:
@@ -8,16 +8,93 @@ permissions:
   contents: read
 
 jobs:
-  test:
+  snac-runtime:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - name: Create test file
+      - name: Download pretrained SNAC decoder
         run: |
-          mkdir -p out
-          printf 'ok\n' > out/test.txt
-      - name: Upload test artifact
+          set -euxo pipefail
+          mkdir -p out/snac
+          curl -fL --retry 8 --retry-all-errors \
+            -o out/snac/decoder_model.onnx \
+            'https://huggingface.co/onnx-community/snac_24khz-ONNX/resolve/main/onnx/decoder_model.onnx?download=true'
+          sha256sum out/snac/decoder_model.onnx | tee out/snac/decoder_model.onnx.sha256
+          stat -c '%n %s bytes' out/snac/decoder_model.onnx | tee out/snac/decoder_model.onnx.size.txt
+      - name: Upload SNAC runtime
         uses: actions/upload-artifact@v4
         with:
-          name: test-artifact
-          path: out
+          name: snac-runtime
+          path: out/snac
+          compression-level: 0
           retention-days: 1
+          if-no-files-found: error
+
+  transcription-runtime:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+      - name: Download relocatable Python 3.12
+        run: |
+          set -euxo pipefail
+          mkdir -p out/python312 out/wheels out/logs
+          uv python install 3.12 --install-dir out/python312 --no-bin
+          find out/python312 -type f \( -name python3.12 -o -name python \) -print | tee out/logs/python-candidates.txt
+      - name: Download Linux wheels
+        run: |
+          set -euxo pipefail
+          PY="$(find out/python312 -type f -path '*/bin/python3.12' | head -n 1)"
+          test -n "$PY"
+          "$PY" -m ensurepip --upgrade
+          "$PY" -m pip install --upgrade pip
+          "$PY" -m pip download --only-binary=:all: --dest out/wheels \
+            'onnxruntime>=1.21,<2' \
+            'faster-whisper>=1.1,<2' \
+            'huggingface-hub>=0.30,<2'
+          ls -lah out/wheels | tee out/logs/wheel-list.txt
+      - name: Upload portable Python and wheels
+        uses: actions/upload-artifact@v4
+        with:
+          name: transcription-runtime
+          path: out
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  asr-model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Download Faster-Whisper large-v3-turbo CTranslate2 model
+        run: |
+          set -euxo pipefail
+          mkdir -p out/asr-model out/logs
+          python -m pip install --upgrade pip 'huggingface-hub>=0.30,<2' hf-xet
+          python - <<'PY'
+          from huggingface_hub import snapshot_download
+          print(snapshot_download(
+              repo_id='deepdml/faster-whisper-large-v3-turbo-ct2',
+              local_dir='out/asr-model',
+              allow_patterns=[
+                  'config.json', 'model.bin', 'tokenizer.json',
+                  'preprocessor_config.json', 'vocabulary.json',
+                  'vocabulary.txt', '*.model', '*.txt'
+              ],
+          ))
+          PY
+          find out/asr-model -type f -printf '%P\t%s\n' | sort | tee out/logs/asr-model-files.tsv
+          sha256sum out/asr-model/* | tee out/logs/asr-model-sha256.txt
+      - name: Upload ASR model
+        uses: actions/upload-artifact@v4
+        with:
+          name: faster-whisper-large-v3-turbo
+          path: out
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
