@@ -1,0 +1,126 @@
+name: Temporary Qwen3 subtitle proofreader runtime
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  llama-runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Build llama.cpp CLI
+        shell: bash
+        run: |
+          set -euxo pipefail
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build g++
+          git clone --depth 1 https://github.com/ggml-org/llama.cpp.git
+          cmake -S llama.cpp -B llama.cpp/build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DGGML_NATIVE=OFF \
+            -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON \
+            -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=ON
+          cmake --build llama.cpp/build --target llama-cli -j 4
+          mkdir -p out/bin
+          cp llama.cpp/build/bin/llama-cli out/bin/
+          chmod 0755 out/bin/llama-cli
+          out/bin/llama-cli --version | tee out/llama-version.txt
+          ldd out/bin/llama-cli | tee out/llama-ldd.txt
+          sha256sum out/bin/llama-cli > out/SHA256SUMS.txt
+      - name: Upload llama runtime
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-cli-linux-x64
+          path: out
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+  qwen-model:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - name: Download official Qwen3 4B Q4_K_M GGUF and split
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out/model-parts out/meta
+          url='https://huggingface.co/Qwen/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q4_K_M.gguf?download=true'
+          curl -fL --retry 12 --retry-all-errors --connect-timeout 30 \
+            -o /tmp/Qwen3-4B-Q4_K_M.gguf "$url"
+          sha256sum /tmp/Qwen3-4B-Q4_K_M.gguf | tee out/meta/model.sha256
+          stat -c '%s' /tmp/Qwen3-4B-Q4_K_M.gguf | tee out/meta/model.size
+          split -b 400000000 -d -a 2 /tmp/Qwen3-4B-Q4_K_M.gguf out/model-parts/Qwen3-4B-Q4_K_M.gguf.part-
+          find out/model-parts -type f -printf '%f\t%s\n' | sort | tee out/meta/model-parts.tsv
+          sha256sum out/model-parts/* | tee out/meta/model-parts.sha256
+      - name: Upload model metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-4b-q4km-meta
+          path: out/meta
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+      - name: Upload model part 00
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-4b-q4km-00
+          path: out/model-parts/Qwen3-4B-Q4_K_M.gguf.part-00
+          retention-days: 1
+          compression-level: 0
+      - name: Upload model part 01
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-4b-q4km-01
+          path: out/model-parts/Qwen3-4B-Q4_K_M.gguf.part-01
+          retention-days: 1
+          compression-level: 0
+      - name: Upload model part 02
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-4b-q4km-02
+          path: out/model-parts/Qwen3-4B-Q4_K_M.gguf.part-02
+          retention-days: 1
+          compression-level: 0
+      - name: Upload model part 03
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-4b-q4km-03
+          path: out/model-parts/Qwen3-4B-Q4_K_M.gguf.part-03
+          retention-days: 1
+          compression-level: 0
+      - name: Upload model part 04
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-4b-q4km-04
+          path: out/model-parts/Qwen3-4B-Q4_K_M.gguf.part-04
+          retention-days: 1
+          compression-level: 0
+      - name: Upload model part 05
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-4b-q4km-05
+          path: out/model-parts/Qwen3-4B-Q4_K_M.gguf.part-05
+          retention-days: 1
+          compression-level: 0
+      - name: Upload model part 06
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-4b-q4km-06
+          path: out/model-parts/Qwen3-4B-Q4_K_M.gguf.part-06
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: ignore
+      - name: Upload model part 07 if present
+        uses: actions/upload-artifact@v4
+        with:
+          name: qwen3-4b-q4km-07
+          path: out/model-parts/Qwen3-4B-Q4_K_M.gguf.part-07
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: ignore
