@@ -1,4 +1,4 @@
-name: Temporary unrar runtime fetch
+name: Temporary Adobe source accessibility test
 
 on:
   pull_request:
@@ -12,23 +12,23 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - name: Download official RAR for Linux
+      - name: Test Adobe share download
         run: |
           set -euxo pipefail
           mkdir -p out
-          curl -fL --retry 8 --retry-all-errors \
-            -o /tmp/rarlinux.tar.gz \
-            https://www.rarlab.com/rar/rarlinux-x64-723.tar.gz
-          tar -xzf /tmp/rarlinux.tar.gz -C /tmp
-          cp /tmp/rar/unrar out/unrar
-          chmod 0755 out/unrar
-          out/unrar | head -n 5 || true
-          sha256sum out/unrar > out/unrar.sha256
-      - name: Upload unrar
+          URL='https://www.adobe.com/files/id/urn:aaid:sc:AP:8b445864-1490-40a9-80b0-b2d5b262138c'
+          curl -L --fail --retry 6 --retry-all-errors -A 'Mozilla/5.0' \
+            -D out/headers.txt -o out/source.bin "$URL"
+          stat -c '%s' out/source.bin | tee out/size.txt
+          file out/source.bin | tee out/file.txt
+          sha256sum out/source.bin | tee out/sha256.txt
+          head -c 64 out/source.bin | xxd -p | tee out/head.hex
+      - name: Upload diagnostic
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: unrar-linux-x64
+          name: adobe-source-diagnostic
           path: out
           retention-days: 1
           compression-level: 0
-          if-no-files-found: error
+          if-no-files-found: warn
