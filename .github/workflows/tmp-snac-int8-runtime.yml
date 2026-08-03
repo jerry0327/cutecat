@@ -1,0 +1,33 @@
+name: Temporary SNAC INT8 runtime fetch
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  fetch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Download SNAC decoder model variants
+        shell: bash
+        run: |
+          set -euxo pipefail
+          mkdir -p out
+          base='https://huggingface.co/onnx-community/snac_24khz-ONNX/resolve/main/onnx'
+          for name in decoder_model_int8.onnx decoder_model_fp16.onnx; do
+            curl -fL --retry 8 --retry-all-errors -o "out/$name" "$base/$name?download=true"
+            sha256sum "out/$name" >> out/SHA256SUMS.txt
+            stat -c '%n %s bytes' "out/$name"
+          done
+      - name: Upload model variants
+        uses: actions/upload-artifact@v4
+        with:
+          name: snac-model-variants
+          path: out
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
