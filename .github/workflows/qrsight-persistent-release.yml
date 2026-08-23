@@ -1,0 +1,290 @@
+name: Build QRSight Persistent Signed Release
+
+on:
+  push:
+    branches:
+      - 'qr-apk-staging-*'
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  build-persistent-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Restore and patch QRSight source
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat qrsight_bundle.part-* | base64 --decode > /tmp/qrsight-source.tar.gz
+          tar -xzf /tmp/qrsight-source.tar.gz
+          test -f qrscanner/app/build.gradle
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          root = Path('qrscanner')
+          main = root / 'app/src/main/java/com/jerry/qrsight/MainActivity.java'
+          history = root / 'app/src/main/java/com/jerry/qrsight/HistoryActivity.java'
+          build = root / 'app/build.gradle'
+          manifest = root / 'app/src/main/AndroidManifest.xml'
+          readme = root / 'README.md'
+
+          text = main.read_text(encoding='utf-8')
+          text = text.replace('import android.content.ColorStateList;', 'import android.content.res.ColorStateList;')
+          if 'import android.annotation.SuppressLint;' not in text:
+              text = text.replace('import android.Manifest;\n', 'import android.Manifest;\nimport android.annotation.SuppressLint;\n')
+          if '@SuppressLint("UnsafeOptInUsageError")' not in text:
+              text = text.replace(
+                  '    private void analyzeImage(@NonNull ImageProxy imageProxy) {',
+                  '    @SuppressLint("UnsafeOptInUsageError")\n    private void analyzeImage(@NonNull ImageProxy imageProxy) {'
+              )
+          sort_pattern = re.compile(
+              r'        Collections\.sort\(found,\s*Comparator\s*'
+              r'\.comparingDouble\(\(Detection item\) -> item\.bounds\.top\)\s*'
+              r'\.thenComparingDouble\(item -> item\.bounds\.left\)\);'
+          )
+          replacement = (
+              '        Collections.sort(found, (first, second) -> {\n'
+              '            int topOrder = Float.compare(first.bounds.top, second.bounds.top);\n'
+              '            return topOrder != 0 ? topOrder : Float.compare(first.bounds.left, second.bounds.left);\n'
+              '        });'
+          )
+          text, count = sort_pattern.subn(replacement, text)
+          if count != 1:
+              raise SystemExit(f'Expected one legacy comparator block, found {count}')
+          text = text.replace('import java.util.Comparator;\n', '')
+          main.write_text(text, encoding='utf-8')
+
+          h = history.read_text(encoding='utf-8')
+          h = h.replace('import android.content.ColorStateList;\n', '')
+          h = h.replace('import android.content.res.ColorStateList;\n', '')
+          history.write_text(h, encoding='utf-8')
+
+          g = build.read_text(encoding='utf-8')
+          if 'targetSdk 35' not in g:
+              raise SystemExit('Expected targetSdk 35 in source bundle')
+          g = g.replace('targetSdk 35', 'targetSdk 36')
+          build.write_text(g, encoding='utf-8')
+
+          m = manifest.read_text(encoding='utf-8')
+          if 'xmlns:tools=' not in m:
+              m = m.replace(
+                  '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+                  '<manifest xmlns:android="http://schemas.android.com/apk/res/android"\n'
+                  '    xmlns:tools="http://schemas.android.com/tools">'
+              )
+          removals = (
+              '    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />\n'
+              '    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" tools:node="remove" />\n\n'
+          )
+          camera = '    <uses-permission android:name="android.permission.CAMERA" />'
+          if 'android.permission.INTERNET" tools:node="remove"' not in m:
+              m = m.replace(camera, removals + camera)
+          m = re.sub(r'\n\s*android:screenOrientation="portrait"', '', m)
+          manifest.write_text(m, encoding='utf-8')
+
+          if readme.exists():
+              readme.write_text(
+                  readme.read_text(encoding='utf-8').replace('targetSdk: 35', 'targetSdk: 36'),
+                  encoding='utf-8'
+              )
+          PY
+
+          ! grep -R --line-number 'Comparator.comparingDouble' qrscanner/app/src/main/java
+          grep -q 'targetSdk 36' qrscanner/app/build.gradle
+          grep -q 'android.permission.INTERNET" tools:node="remove"' qrscanner/app/src/main/AndroidManifest.xml
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android platform and build tools
+        shell: bash
+        run: |
+          yes | sdkmanager --licenses >/dev/null || true
+          sdkmanager 'platform-tools' 'platforms;android-36' 'build-tools;36.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.13'
+
+      - name: Generate and preserve release signing key
+        id: signing
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          PASS="$(openssl rand -hex 24)"
+          echo "::add-mask::$PASS"
+          KEYSTORE="$GITHUB_WORKSPACE/dist/QRSight-v1.0.0-release-signing.jks"
+
+          keytool -genkeypair -noprompt \
+            -keystore "$KEYSTORE" \
+            -storetype JKS \
+            -storepass "$PASS" \
+            -keypass "$PASS" \
+            -alias qrsight \
+            -keyalg RSA \
+            -keysize 4096 \
+            -validity 10000 \
+            -dname 'CN=QRSight Release,O=Jerry Wang,C=TW'
+
+          chmod 600 "$KEYSTORE"
+          {
+            echo 'QRSight v1.0.0 release signing credentials'
+            echo 'KEEP THIS FILE AND THE JKS PRIVATE.'
+            echo 'Keystore file: QRSight-v1.0.0-release-signing.jks'
+            echo 'Alias: qrsight'
+            echo "Store password: $PASS"
+            echo "Key password: $PASS"
+            echo 'Purpose: sign all future com.jerry.qrsight updates.'
+          } > dist/QRSight-v1.0.0-signing-credentials.txt
+          chmod 600 dist/QRSight-v1.0.0-signing-credentials.txt
+
+          keytool -list -v \
+            -keystore "$KEYSTORE" \
+            -storepass "$PASS" \
+            -alias qrsight \
+            > dist/QRSight-v1.0.0-signing-certificate.txt
+
+          echo "keystore=$KEYSTORE" >> "$GITHUB_OUTPUT"
+          echo "password=$PASS" >> "$GITHUB_OUTPUT"
+
+      - name: Test, lint, and build signed release
+        working-directory: qrscanner
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle --no-daemon --stacktrace --console=plain \
+            testReleaseUnitTest lintRelease assembleRelease \
+            -PQRSIGHT_STORE_FILE='${{ steps.signing.outputs.keystore }}' \
+            -PQRSIGHT_STORE_PASSWORD='${{ steps.signing.outputs.password }}' \
+            -PQRSIGHT_KEY_ALIAS='qrsight' \
+            -PQRSIGHT_KEY_PASSWORD='${{ steps.signing.outputs.password }}'
+
+      - name: Verify and package release
+        shell: bash
+        run: |
+          set -euo pipefail
+          APK='qrscanner/app/build/outputs/apk/release/app-release.apk'
+          OUT='dist/QRSight-v1.0.0-release.apk'
+          BT="$ANDROID_HOME/build-tools/36.0.0"
+
+          test -s "$APK"
+          cp "$APK" "$OUT"
+          "$BT/zipalign" -c -v 4 "$OUT" > dist/zipalign.txt
+          "$BT/apksigner" verify --verbose --print-certs "$OUT" > dist/signature.txt
+          unzip -t "$OUT" > dist/unzip-test.txt
+
+          MANIFEST="$(find qrscanner/app/build/intermediates -type f -path '*release*' -name AndroidManifest.xml \
+            | grep -E '/(merged_manifests|packaged_manifests)/' | head -n 1)"
+          test -s "$MANIFEST"
+          cp "$MANIFEST" dist/AndroidManifest-merged.xml
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          root = ET.parse('dist/AndroidManifest-merged.xml').getroot()
+          android = '{http://schemas.android.com/apk/res/android}'
+          uses_sdk = root.find('uses-sdk')
+          package_name = root.attrib.get('package', '')
+          min_sdk = uses_sdk.attrib.get(android + 'minSdkVersion', '') if uses_sdk is not None else ''
+          target_sdk = uses_sdk.attrib.get(android + 'targetSdkVersion', '') if uses_sdk is not None else ''
+          permissions = sorted({
+              node.attrib.get(android + 'name', '')
+              for node in root.findall('uses-permission')
+              if node.attrib.get(android + 'name', '')
+          })
+          assert package_name == 'com.jerry.qrsight', package_name
+          assert min_sdk == '23', min_sdk
+          assert target_sdk == '36', target_sdk
+          assert 'android.permission.CAMERA' in permissions
+          forbidden = {
+              'android.permission.INTERNET',
+              'android.permission.ACCESS_NETWORK_STATE',
+              'android.permission.READ_EXTERNAL_STORAGE',
+              'android.permission.WRITE_EXTERNAL_STORAGE',
+              'android.permission.READ_MEDIA_IMAGES',
+          }
+          assert not forbidden.intersection(permissions), forbidden.intersection(permissions)
+          Path('dist/package-metadata.txt').write_text(
+              f'Package: {package_name}\nminSdk: {min_sdk}\ntargetSdk: {target_sdk}\n',
+              encoding='utf-8'
+          )
+          Path('dist/permissions.txt').write_text('\n'.join(permissions) + '\n', encoding='utf-8')
+          PY
+
+          zip -qr dist/QRSight-v1.0.0-source.zip qrscanner \
+            -x '*/.gradle/*' '*/build/*' '*.jks' '*.keystore'
+
+          (
+            cd dist
+            zip -q QRSight-v1.0.0-developer-signing-backup.zip \
+              QRSight-v1.0.0-release-signing.jks \
+              QRSight-v1.0.0-signing-credentials.txt \
+              QRSight-v1.0.0-signing-certificate.txt
+          )
+
+          sha256sum \
+            dist/QRSight-v1.0.0-release.apk \
+            dist/QRSight-v1.0.0-source.zip \
+            dist/QRSight-v1.0.0-developer-signing-backup.zip \
+            > dist/SHA256SUMS.txt
+
+          {
+            echo 'QRSight 快掃 v1.0.0'
+            echo 'Build type: signed persistent release APK'
+            cat dist/package-metadata.txt
+            echo
+            echo '=== Permissions ==='
+            cat dist/permissions.txt
+            echo
+            echo '=== SHA-256 ==='
+            cat dist/SHA256SUMS.txt
+            echo
+            echo '=== APK signature ==='
+            cat dist/signature.txt
+            echo
+            echo '=== ZIP alignment ==='
+            tail -n 3 dist/zipalign.txt
+            echo
+            echo 'Unit tests, Android Lint, signed release build, signature, alignment, ZIP integrity, SDK, package and permission checks passed.'
+            echo 'The developer signing backup matches this APK and is required for in-place future updates.'
+          } > dist/QRSight-v1.0.0-build-report.txt
+
+          rm -f \
+            dist/QRSight-v1.0.0-release-signing.jks \
+            dist/QRSight-v1.0.0-signing-credentials.txt \
+            dist/QRSight-v1.0.0-signing-certificate.txt
+
+      - name: Upload persistent signed release
+        uses: actions/upload-artifact@v4
+        with:
+          name: qrsight-persistent-release
+          path: |
+            dist/QRSight-v1.0.0-release.apk
+            dist/QRSight-v1.0.0-source.zip
+            dist/QRSight-v1.0.0-developer-signing-backup.zip
+            dist/QRSight-v1.0.0-build-report.txt
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
