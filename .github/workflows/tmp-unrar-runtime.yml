@@ -1,0 +1,47 @@
+name: Temporary Adobe source endpoint probe
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe candidate endpoints
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p out
+          SHARE='https://www.adobe.com/files/id/urn:aaid:sc:AP:8b445864-1490-40a9-80b0-b2d5b262138c'
+          RAW='https://platform-cs-jpn3.adobe.io/content/storage/id/urn:aaid:sc:AP:8b445864-1490-40a9-80b0-b2d5b262138c'
+          for key in raw share; do
+            if [ "$key" = raw ]; then URL="$RAW"; else URL="$SHARE"; fi
+            echo "$URL" > "out/${key}.url.txt"
+            curl --http1.1 -sS -L --connect-timeout 15 --max-time 75 \
+              -A 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/131 Safari/537.36' \
+              -D "out/${key}.headers.txt" -o "out/${key}.bin" \
+              -w '%{http_code}\n%{url_effective}\n%{content_type}\n%{size_download}\n' "$URL" \
+              > "out/${key}.summary.txt" 2> "out/${key}.stderr.txt" || true
+            if [ -f "out/${key}.bin" ]; then
+              stat -c '%s' "out/${key}.bin" > "out/${key}.size.txt"
+              file "out/${key}.bin" > "out/${key}.file.txt"
+              sha256sum "out/${key}.bin" > "out/${key}.sha256.txt"
+              head -c 512 "out/${key}.bin" | xxd -p > "out/${key}.head.hex"
+              strings -n 8 "out/${key}.bin" | head -n 100 > "out/${key}.strings.txt" || true
+            fi
+          done
+          echo 'RAW'; cat out/raw.summary.txt; cat out/raw.file.txt || true
+          echo 'SHARE'; cat out/share.summary.txt; cat out/share.file.txt || true
+      - name: Upload diagnostics
+        uses: actions/upload-artifact@v4
+        with:
+          name: adobe-source-endpoint-probe
+          path: out
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
